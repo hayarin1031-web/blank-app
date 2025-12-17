@@ -71,4 +71,4 @@ def game():
 if st.button("実行"):
     for _ in range(20):
         team, rest = game()
-        st.write(f"チーム: {team}"}
+        st.write(f"チーム: {team}")
