@@ -1,74 +1,312 @@
+
 import streamlit as st
 from collections import defaultdict
 from itertools import combinations
 import random
 
-num = 4
-num_people = st.number_input("人数：", min_value=4, max_value=50, value=9)
+# =========================
+# 基本設定
+# =========================
 
-permit_num = 0 if num_people - 5 <= 1 else 1
-people = list(range(1, num_people+1))
+num = 4  # 1試合の参加人数
 
-enter_count = defaultdict(int, {p: 0 for p in people})
-pair_count = defaultdict(int)
-rest_count = defaultdict(int, {p: 0 for p in people})
-last_rest = set()
+num_people = st.number_input(
+    "人数：",
+    min_value=4,
+    max_value=50,
+    value=9
+)
+
+people = list(range(1, num_people + 1))
+
+# 1試合あたりの候補探索回数
+SEARCH_COUNT = 500
+
+
+# =========================
+# 履歴の初期化
+# =========================
+
+def initialize():
+    st.session_state.enter_count = defaultdict(
+        int, {p: 0 for p in people}
+    )
+
+    st.session_state.rest_count = defaultdict(
+        int, {p: 0 for p in people}
+    )
+
+    st.session_state.pair_count = defaultdict(int)
+    st.session_state.opponent_count = defaultdict(int)
+    st.session_state.last_rest = set()
+    st.session_state.history = []
+
+
+# 初回実行時・人数変更時に初期化
+if (
+    "saved_num_people" not in st.session_state
+    or st.session_state.saved_num_people != num_people
+):
+    st.session_state.saved_num_people = num_people
+    initialize()
+
+enter_count = st.session_state.enter_count
+rest_count = st.session_state.rest_count
+pair_count = st.session_state.pair_count
+opponent_count = st.session_state.opponent_count
+
+
+# =========================
+# 出場者の選択
+# =========================
 
 def select_members(people, enter_count, num):
-    global last_rest
-    while True:
-        minimum = min(enter_count.values())
-        members = []
-        candidates = []
-        while (len(members) < num):
-            candidates = [p for p in people if enter_count[p] == minimum]
-            if len(members) + len(candidates) < num:
-                members += candidates
-            else:
-                break
-            minimum += 1
-        sub = num - len(members)
-        members += random.sample(candidates, sub)
-        rest_members = [x for x in enter_count.keys() if x not in members]
-        min_rest = min(rest_count[p] for p in rest_members)
-        rest_candidates = []
-        out_flag = False
-        while (set(rest_members) <= set(rest_candidates)):
-            rest_candidates += [p for p in rest_members if rest_count[p] == min_rest]
-            if (not (set(rest_members) <= set(rest_candidates)) and len(rest_candidates) > len(rest_members)):
-                out_flag = True
-                break
-            min_rest += 1
-        if out_flag:
-            continue
-        if len(last_rest & set(rest_members)) <= permit_num:
-            last_rest = set(rest_members)
-            return members, rest_members
-        else:
-            continue
+
+    # 出場回数の少ない順に並べる
+    sorted_people = sorted(
+        people,
+        key=lambda p: enter_count[p]
+    )
+
+    # 4番目に少ない人の出場回数
+    threshold = enter_count[sorted_people[num - 1]]
+
+    # 必ず出場する人
+    fixed_members = [
+        p for p in people
+        if enter_count[p] < threshold
+    ]
+
+    # 同じ出場回数の候補者
+    candidates = [
+        p for p in people
+        if enter_count[p] == threshold
+    ]
+
+    remaining = num - len(fixed_members)
+
+    best_members = None
+    best_rest = None
+    best_score = float("inf")
+
+    # 候補をランダムに探索
+    for _ in range(SEARCH_COUNT):
+
+        selected = random.sample(
+            candidates, remaining
+        )
+
+        members = fixed_members + selected
+
+        rest_members = [
+            p for p in people
+            if p not in members
+        ]
+
+        # 前回から連続して休憩する人数
+        overlap = len(
+            st.session_state.last_rest
+            & set(rest_members)
+        )
+
+        # 休憩回数の偏り
+        rest_values = [
+            rest_count[p] + (p in rest_members)
+            for p in people
+        ]
+
+        rest_balance = (
+            max(rest_values) - min(rest_values)
+        )
+
+        # 評価値（小さいほど良い）
+        score = (
+            overlap * 10
+            + rest_balance * 3
+        )
+
+        if score < best_score:
+            best_score = score
+            best_members = members
+            best_rest = rest_members
+
+    return best_members, best_rest
+
+
+# =========================
+# チーム分け
+# =========================
+
+def select_teams(members):
+
+    best_score = float("inf")
+    best_teams = []
+
+    # 4人から2人を選ぶ
+    for p in combinations(members, 2):
+
+        team1 = tuple(sorted(p))
+
+        team2 = tuple(sorted(
+            i for i in members
+            if i not in team1
+        ))
+
+        # ペアの重複回数
+        pair_overlap = (
+            pair_count[team1]
+            + pair_count[team2]
+        )
+
+        # 対戦相手の重複回数
+        opponent_overlap = 0
+
+        for a in team1:
+            for b in team2:
+                pair = tuple(sorted((a, b)))
+                opponent_overlap += opponent_count[pair]
+
+        # 評価値
+        score = (
+            pair_overlap * 10
+            + opponent_overlap * 2
+        )
+
+        if score < best_score:
+            best_score = score
+            best_teams = [(team1, team2)]
+
+        elif score == best_score:
+            best_teams.append((team1, team2))
+
+    # 同点ならランダム選択
+    return random.choice(best_teams)
+
+
+# =========================
+# 1試合を生成
+# =========================
 
 def game():
-    member, current_rest = select_members(people, enter_count, num)
-    for i in member:
-        enter_count[i] += 1
-    for i in current_rest:
-        rest_count[i] += 1
-    overlap = 0
-    min_overlap = 100
-    for p in combinations(member,2):
-        team1 = tuple(sorted(p))
-        team2 = tuple(sorted(i for i in member if i not in team1))
-        overlap += pair_count[team1]
-        overlap += pair_count[team2]
-        if overlap < min_overlap:
-            min_overlap = overlap
-            best_team = [team1,team2]
-        overlap = 0
-    pair_count[best_team[0]] += 1
-    pair_count[best_team[1]] += 1
-    return best_team, current_rest
 
-if st.button("実行"):
+    members, current_rest = select_members(
+        people, enter_count, num
+    )
+
+    team1, team2 = select_teams(members)
+
+    # 出場回数を更新
+    for p in members:
+        enter_count[p] += 1
+
+    # 休憩回数を更新
+    for p in current_rest:
+        rest_count[p] += 1
+
+    # ペア回数を更新
+    pair_count[team1] += 1
+    pair_count[team2] += 1
+
+    # 対戦回数を更新
+    for a in team1:
+        for b in team2:
+            pair = tuple(sorted((a, b)))
+            opponent_count[pair] += 1
+
+    # 前回の休憩者を保存
+    st.session_state.last_rest = set(current_rest)
+
+    return (team1, team2), current_rest
+
+
+# =========================
+# Streamlit画面
+# =========================
+
+st.title("チーム分けシステム")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    execute = st.button("20試合生成")
+
+with col2:
+    reset = st.button("履歴リセット")
+
+if reset:
+    initialize()
+    st.success("履歴をリセットしました")
+
+if execute:
+
     for _ in range(20):
+
         team, rest = game()
-        st.write(f"チーム: {team}")
+
+        st.session_state.history.append({
+            "team": team,
+            "rest": rest
+        })
+
+
+# =========================
+# 試合結果の表示
+# =========================
+
+st.subheader("試合結果")
+
+for i, result in enumerate(st.session_state.history, 1):
+
+    team = result["team"]
+    rest = result["rest"]
+
+    st.write(
+        f"第{i}試合: "
+        f"{team[0]} vs {team[1]}"
+    )
+
+    st.write(f"休憩: {rest}")
+
+
+# =========================
+# 出場回数の表示
+# =========================
+
+st.subheader("出場・休憩回数")
+
+data = []
+
+for p in people:
+    data.append({
+        "参加者": p,
+        "出場回数": enter_count[p],
+        "休憩回数": rest_count[p]
+    })
+
+st.dataframe(
+    data,
+    hide_index=True,
+    use_container_width=True
+)
+
+
+# =========================
+# ペア履歴の表示
+# =========================
+
+st.subheader("ペア履歴")
+
+pair_data = []
+
+for pair, count in sorted(pair_count.items()):
+    if count > 0:
+        pair_data.append({
+            "ペア": str(pair),
+            "同じチームになった回数": count
+        })
+
+st.dataframe(
+    pair_data,
+    hide_index=True,
+    use_container_width=True
+)
