@@ -187,13 +187,26 @@ def select_teams(members):
 # 1試合を生成
 # =========================
 
+
 def game():
 
-    members, current_rest = select_members(
-        people, enter_count, num
-    )
+    # 最初の試合は固定
+    if len(st.session_state.history) == 0:
+        team1 = (1, 2)
+        team2 = (3, 4)
 
-    team1, team2 = select_teams(members)
+        members = [1, 2, 3, 4]
+        current_rest = [
+            p for p in people if p not in members
+        ]
+
+    # 2試合目以降は自動選択
+    else:
+        members, current_rest = select_members(
+            people, enter_count, num
+        )
+
+        team1, team2 = select_teams(members)
 
     # 出場回数を更新
     for p in members:
@@ -217,6 +230,7 @@ def game():
     st.session_state.last_rest = set(current_rest)
 
     return (team1, team2), current_rest
+
 
 
 # =========================
